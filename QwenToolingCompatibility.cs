@@ -97,7 +97,7 @@ public static partial class QwenToolingCompatibility
                 if (expectsWorkspaceChanges
                     && !appliedWorkspaceChange
                     && !promptedForWorkspaceChanges
-                    && LooksLikeGitHintOnlyReply(content))
+                    && ShouldPromptForWorkspaceChanges(content))
                 {
                     history.AddUserMessage("Your last reply only gave git or workflow advice, but the user asked for a local workspace change. Inspect files if needed and use Workspace or CodeEditor write/edit tools to apply the requested change locally before your final answer.");
                     promptedForWorkspaceChanges = true;
@@ -209,7 +209,7 @@ public static partial class QwenToolingCompatibility
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     }
 
-    private static bool LooksLikeGitHintOnlyReply(string content)
+    private static bool ShouldPromptForWorkspaceChanges(string content)
     {
         if (string.IsNullOrWhiteSpace(content))
         {
@@ -217,9 +217,10 @@ public static partial class QwenToolingCompatibility
         }
 
         var normalized = content.Trim();
-        return Regex.IsMatch(
+        return !normalized.Contains('?', StringComparison.Ordinal)
+            && !Regex.IsMatch(
                 normalized,
-                @"\b(git|commit|branch|checkout|merge|rebase|pull request|workflow|\.gitignore)\b",
+                @"\b(cannot|can't|unable|failed|error|not found|missing|which file|need more information|permission denied)\b",
                 RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)
             && !Regex.IsMatch(
                 normalized,

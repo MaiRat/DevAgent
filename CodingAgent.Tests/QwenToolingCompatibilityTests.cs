@@ -120,7 +120,7 @@ public sealed class QwenToolingCompatibilityTests
             Assert.Equal("Created notes.txt with the requested content.", response);
             Assert.Equal("hello from qwen fallback", File.ReadAllText(Path.Combine(workspaceRoot, "notes.txt")));
             Assert.Contains(
-                chat.SeenHistories[1].Last(),
+                chat.SeenHistories[1],
                 message => message.Role == AuthorRole.User
                     && (message.Content?.Contains("use Workspace or CodeEditor write/edit tools", StringComparison.Ordinal) ?? false));
         }
