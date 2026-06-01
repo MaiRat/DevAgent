@@ -38,9 +38,9 @@ public static partial class QwenToolingCompatibility
         builder.AppendLine("You are running in local qwen3 tool compatibility mode.");
         builder.AppendLine("When you need a tool, respond with XML only using this exact shape:");
         builder.AppendLine("<tool_call>");
-        builder.AppendLine("  <function=PluginName.function_name>");
-        builder.AppendLine("    <parameter=argumentName>value</parameter>");
-        builder.AppendLine("  </function>");
+        builder.AppendLine("  <PluginName.function_name>");
+        builder.AppendLine("    <argumentName>value</argumentName>");
+        builder.AppendLine("  </PluginName.function_name>");
         builder.AppendLine("</tool_call>");
         builder.AppendLine("Use one <tool_call> block per tool invocation and include every required parameter.");
         builder.AppendLine("If no tool is needed, answer normally.");
@@ -218,6 +218,7 @@ public static partial class QwenToolingCompatibility
             }
             catch
             {
+                // Ignore malformed XML fragments so the model can still recover with a normal text reply.
             }
         }
 
@@ -294,6 +295,7 @@ public static partial class QwenToolingCompatibility
         }
         catch
         {
+            // Ignore malformed JSON payloads and fall back to treating the response as plain assistant text.
             return new List<QwenParsedToolCall>();
         }
     }
