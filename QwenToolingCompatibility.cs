@@ -309,61 +309,7 @@ public static partial class QwenToolingCompatibility
         try
         {
             using var document = JsonDocument.Parse(json);
-            if (!document.RootElement.TryGetProperty("tool_calls", out var toolCallsElement) || toolCallsElement.ValueKind != JsonValueKind.Array)
-            {
-                return new List<QwenParsedToolCall>();
-            }
-
-            var toolCalls = new List<QwenParsedToolCall>();
-            foreach (var item in toolCallsElement.EnumerateArray())
-            {
-                if (!item.TryGetProperty("function", out var functionElement))
-                {
-                    continue;
-                }
-
-                if (!functionElement.TryGetProperty("name", out var nameElement))
-                {
-                    continue;
-                }
-
-                var toolName = nameElement.GetString();
-                if (string.IsNullOrWhiteSpace(toolName) || !toolIndex.TryGetValue(toolName, out var tool))
-                {
-                    continue;
-                }
-
-                var arguments = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-                if (functionElement.TryGetProperty("arguments", out var argumentsElement))
-                {
-                    if (argumentsElement.ValueKind == JsonValueKind.String)
-                    {
-                        var rawArguments = argumentsElement.GetString();
-                        if (!string.IsNullOrWhiteSpace(rawArguments))
-                        {
-                            using var argsDocument = JsonDocument.Parse(rawArguments);
-                            foreach (var property in argsDocument.RootElement.EnumerateObject())
-                            {
-                                arguments[property.Name] = property.Value.ValueKind == JsonValueKind.String
-                                    ? property.Value.GetString() ?? string.Empty
-                                    : property.Value.GetRawText();
-                            }
-                        }
-                    }
-                    else if (argumentsElement.ValueKind == JsonValueKind.Object)
-                    {
-                        foreach (var property in argumentsElement.EnumerateObject())
-                        {
-                            arguments[property.Name] = property.Value.ValueKind == JsonValueKind.String
-                                ? property.Value.GetString() ?? string.Empty
-                                : property.Value.GetRawText();
-                        }
-                    }
-                }
-
-                toolCalls.Add(new QwenParsedToolCall(tool, arguments));
-            }
-
+            var toolCalls = ParseJsonToolCalls(document.RootElement, toolIndex);
             return toolCalls;
         }
         catch
@@ -371,6 +317,125 @@ public static partial class QwenToolingCompatibility
             // Ignore malformed JSON payloads and fall back to treating the response as plain assistant text.
             return new List<QwenParsedToolCall>();
         }
+    }
+
+    private static List<QwenParsedToolCall> ParseJsonToolCalls(JsonElement element, IReadOnlyDictionary<string, QwenToolDefinition> toolIndex)
+    {
+        if (TryParseJsonToolCallArray(element, "tool_calls", toolIndex, out var toolCalls)
+            || TryParseJsonToolCallArray(element, "function_calls", toolIndex, out toolCalls))
+        {
+            return toolCalls;
+        }
+
+        if (TryParseJsonToolCallProperty(element, "tool_call", toolIndex, out var toolCall)
+            || TryParseJsonToolCallProperty(element, "function_call", toolIndex, out toolCall)
+            || TryParseJsonToolCallElement(element, toolIndex, out toolCall))
+        {
+            return [toolCall!];
+        }
+
+        return new List<QwenParsedToolCall>();
+    }
+
+    private static bool TryParseJsonToolCallArray(
+        JsonElement element,
+        string propertyName,
+        IReadOnlyDictionary<string, QwenToolDefinition> toolIndex,
+        out List<QwenParsedToolCall> toolCalls)
+    {
+        toolCalls = [];
+        if (!element.TryGetProperty(propertyName, out var toolCallsElement) || toolCallsElement.ValueKind != JsonValueKind.Array)
+        {
+            return false;
+        }
+
+        foreach (var item in toolCallsElement.EnumerateArray())
+        {
+            if (TryParseJsonToolCallElement(item, toolIndex, out var toolCall) && toolCall is not null)
+            {
+                toolCalls.Add(toolCall);
+            }
+        }
+
+        return true;
+    }
+
+    private static bool TryParseJsonToolCallProperty(
+        JsonElement element,
+        string propertyName,
+        IReadOnlyDictionary<string, QwenToolDefinition> toolIndex,
+        out QwenParsedToolCall? toolCall)
+    {
+        toolCall = null;
+        return element.TryGetProperty(propertyName, out var toolCallElement)
+            && TryParseJsonToolCallElement(toolCallElement, toolIndex, out toolCall);
+    }
+
+    private static bool TryParseJsonToolCallElement(
+        JsonElement element,
+        IReadOnlyDictionary<string, QwenToolDefinition> toolIndex,
+        out QwenParsedToolCall? toolCall)
+    {
+        toolCall = null;
+
+        JsonElement functionElement;
+        if (element.TryGetProperty("function", out var nestedFunctionElement))
+        {
+            functionElement = nestedFunctionElement;
+        }
+        else
+        {
+            functionElement = element;
+        }
+
+        if (!functionElement.TryGetProperty("name", out var nameElement))
+        {
+            return false;
+        }
+
+        var toolName = nameElement.GetString();
+        if (string.IsNullOrWhiteSpace(toolName) || !toolIndex.TryGetValue(toolName, out var tool))
+        {
+            return false;
+        }
+
+        toolCall = new QwenParsedToolCall(tool, ParseJsonArguments(functionElement));
+        return true;
+    }
+
+    private static Dictionary<string, string> ParseJsonArguments(JsonElement functionElement)
+    {
+        var arguments = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (!functionElement.TryGetProperty("arguments", out var argumentsElement))
+        {
+            return arguments;
+        }
+
+        if (argumentsElement.ValueKind == JsonValueKind.String)
+        {
+            var rawArguments = argumentsElement.GetString();
+            if (!string.IsNullOrWhiteSpace(rawArguments))
+            {
+                using var argsDocument = JsonDocument.Parse(rawArguments);
+                foreach (var property in argsDocument.RootElement.EnumerateObject())
+                {
+                    arguments[property.Name] = property.Value.ValueKind == JsonValueKind.String
+                        ? property.Value.GetString() ?? string.Empty
+                        : property.Value.GetRawText();
+                }
+            }
+        }
+        else if (argumentsElement.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in argumentsElement.EnumerateObject())
+            {
+                arguments[property.Name] = property.Value.ValueKind == JsonValueKind.String
+                    ? property.Value.GetString() ?? string.Empty
+                    : property.Value.GetRawText();
+            }
+        }
+
+        return arguments;
     }
 
     private static string? ExtractJsonCandidate(string content)
