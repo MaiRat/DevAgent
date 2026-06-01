@@ -194,7 +194,7 @@ public sealed class QwenToolingCompatibilityTests
         }
         finally
         {
-            Directory.Delete(workspaceRoot, recursive: true);
+            DeleteDirectoryIfExists(workspaceRoot);
         }
     }
 
@@ -222,8 +222,8 @@ public sealed class QwenToolingCompatibilityTests
         }
         finally
         {
-            Directory.Delete(workspaceRoot, recursive: true);
-            Directory.Delete(externalRoot, recursive: true);
+            DeleteDirectoryIfExists(workspaceRoot);
+            DeleteDirectoryIfExists(externalRoot);
         }
     }
 
@@ -247,8 +247,8 @@ public sealed class QwenToolingCompatibilityTests
         }
         finally
         {
-            Directory.Delete(workspaceRoot, recursive: true);
-            Directory.Delete(externalRoot, recursive: true);
+            DeleteDirectoryIfExists(workspaceRoot);
+            DeleteDirectoryIfExists(externalRoot);
         }
     }
 
@@ -301,6 +301,23 @@ public sealed class QwenToolingCompatibilityTests
         public string ThrowError([Description("Error message to throw.")] string message)
         {
             throw new InvalidOperationException(message);
+        }
+    }
+
+    private static void DeleteDirectoryIfExists(string path)
+    {
+        if (!Directory.Exists(path))
+        {
+            return;
+        }
+
+        try
+        {
+            Directory.Delete(path, recursive: true);
+        }
+        catch
+        {
+            // Best-effort cleanup only.
         }
     }
 
