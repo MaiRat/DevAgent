@@ -70,6 +70,47 @@ public sealed class QwenToolingCompatibilityTests
     }
 
     [Fact]
+    public void ParseToolCalls_ParsesLegacyFunctionCallJson()
+    {
+        const string content = """
+            {
+              "function_call": {
+                "name": "Sample.lookup_value",
+                "arguments": "{\"query\":\"status\",\"mode\":\"brief\"}"
+              }
+            }
+            """;
+
+        var toolCalls = QwenToolingCompatibility.ParseToolCalls(content, SamplePlugins);
+
+        var toolCall = Assert.Single(toolCalls);
+        Assert.Equal("Sample.lookup_value", toolCall.Tool.Name);
+        Assert.Equal("status", toolCall.Arguments["query"]);
+        Assert.Equal("brief", toolCall.Arguments["mode"]);
+    }
+
+    [Fact]
+    public void ParseToolCalls_ParsesSingleToolCallJson()
+    {
+        const string content = """
+            {
+              "tool_call": {
+                "name": "Sample.lookup_value",
+                "arguments": {
+                  "query": "status"
+                }
+              }
+            }
+            """;
+
+        var toolCalls = QwenToolingCompatibility.ParseToolCalls(content, SamplePlugins);
+
+        var toolCall = Assert.Single(toolCalls);
+        Assert.Equal("Sample.lookup_value", toolCall.Tool.Name);
+        Assert.Equal("status", toolCall.Arguments["query"]);
+    }
+
+    [Fact]
     public void IsEnabled_UsesExplicitConfigurationOverride()
     {
         var configuration = new ConfigurationBuilder()
