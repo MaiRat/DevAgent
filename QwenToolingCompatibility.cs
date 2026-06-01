@@ -43,6 +43,7 @@ public static partial class QwenToolingCompatibility
         builder.AppendLine("  </PluginName.function_name>");
         builder.AppendLine("</tool_call>");
         builder.AppendLine("Use one <tool_call> block per tool invocation and include every required parameter.");
+        builder.AppendLine("If the user asks for local code, documentation, or file changes, inspect the workspace and use write/edit tools to apply those changes before your final answer. Do not stop at git hygiene advice alone.");
         builder.AppendLine("If no tool is needed, answer normally.");
         builder.AppendLine("After a <tool_response> message is returned, either issue another <tool_call> block or provide the final answer.");
         builder.AppendLine();
@@ -78,6 +79,10 @@ public static partial class QwenToolingCompatibility
     {
         var toolIndex = BuildToolIndex(DescribeTools(plugins));
         var settings = new OpenAIPromptExecutionSettings();
+        var initialUserRequest = history.LastOrDefault(message => message.Role == AuthorRole.User)?.Content ?? string.Empty;
+        var expectsWorkspaceChanges = LooksLikeWorkspaceChangeRequest(initialUserRequest);
+        var appliedWorkspaceChange = false;
+        var promptedForWorkspaceChanges = false;
 
         for (var iteration = 0; iteration < MaxToolIterations; iteration++)
         {
@@ -89,12 +94,23 @@ public static partial class QwenToolingCompatibility
             var toolCalls = ParseToolCalls(content, toolIndex);
             if (toolCalls.Count == 0)
             {
+                if (expectsWorkspaceChanges
+                    && !appliedWorkspaceChange
+                    && !promptedForWorkspaceChanges
+                    && LooksLikeGitHintOnlyReply(content))
+                {
+                    history.AddUserMessage("Your last reply only gave git or workflow advice, but the user asked for a local workspace change. Inspect files if needed and use Workspace or CodeEditor write/edit tools to apply the requested change locally before your final answer.");
+                    promptedForWorkspaceChanges = true;
+                    continue;
+                }
+
                 return content;
             }
 
             foreach (var toolCall in toolCalls)
             {
                 var toolResponse = await InvokeToolAsync(kernel, toolCall, cancellationToken);
+                appliedWorkspaceChange |= IsWorkspaceMutationTool(toolCall.Tool);
                 history.AddUserMessage(BuildToolResponse(toolCall.Tool.Name, toolResponse));
             }
         }
@@ -178,6 +194,55 @@ public static partial class QwenToolingCompatibility
         }
 
         return ParseJsonToolCalls(content, toolIndex);
+    }
+
+    private static bool LooksLikeWorkspaceChangeRequest(string content)
+    {
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            return false;
+        }
+
+        return Regex.IsMatch(
+            content,
+            @"\b(fix|update|modify|change|edit|write|rewrite|create|add|remove|delete|refactor|implement|rename|document|improve|patch)\b",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
+
+    private static bool LooksLikeGitHintOnlyReply(string content)
+    {
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            return false;
+        }
+
+        var normalized = content.Trim();
+        return Regex.IsMatch(
+                normalized,
+                @"\b(git|commit|branch|checkout|merge|rebase|pull request|workflow|\.gitignore)\b",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)
+            && !Regex.IsMatch(
+                normalized,
+                @"\b(updated|modified|created|wrote|inserted|deleted|restored|changed)\b",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
+
+    private static bool IsWorkspaceMutationTool(QwenToolDefinition tool)
+    {
+        if (string.Equals(tool.PluginName, "CodeEditor", StringComparison.OrdinalIgnoreCase))
+        {
+            return !tool.FunctionName.StartsWith("preview_", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(tool.FunctionName, "list_backups", StringComparison.OrdinalIgnoreCase);
+        }
+
+        if (!string.Equals(tool.PluginName, "Workspace", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return string.Equals(tool.FunctionName, "write_file", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(tool.FunctionName, "append_file", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(tool.FunctionName, "create_task_note", StringComparison.OrdinalIgnoreCase);
     }
 
     private static List<QwenParsedToolCall> ParseXmlToolCalls(string content, IReadOnlyDictionary<string, QwenToolDefinition> toolIndex)
