@@ -63,6 +63,7 @@ internal class Program
             ("HealthCheck", new HealthCheckPlugin(workspaceRoot, configuration))
         };
         var useQwenToolCompatibility = QwenToolingCompatibility.IsEnabled(provider, codingModelId, toolingModelId, configuration);
+        var localToolCompatibilityOverride = configuration["AI:EnableQwenToolCompatibility"];
 
         if (isOllama)
         {
@@ -115,15 +116,23 @@ internal class Program
         }
         Console.WriteLine($"Coding model: {codingModelId}");
         Console.WriteLine($"Tooling model suggestion: {toolingModelId}");
-        Console.WriteLine($"Qwen3 local tooling compatibility: {(useQwenToolCompatibility ? "enabled" : "disabled")}");
+        Console.WriteLine($"Local tooling compatibility fallback: {(useQwenToolCompatibility ? "enabled" : "disabled")}");
+        Console.WriteLine(useQwenToolCompatibility
+            ? string.IsNullOrWhiteSpace(localToolCompatibilityOverride)
+                ? "Local model tooling compatibility reason: enabled by default for Ollama/local model sessions."
+                : $"Local model tooling compatibility reason: configuration override AI:EnableQwenToolCompatibility={localToolCompatibilityOverride}."
+            : string.IsNullOrWhiteSpace(localToolCompatibilityOverride)
+                ? "Local model tooling compatibility reason: disabled because automatic function calling remains active for this provider."
+                : $"Local model tooling compatibility reason: configuration override AI:EnableQwenToolCompatibility={localToolCompatibilityOverride}.");
         if (string.Equals(provider, "Ollama", StringComparison.OrdinalIgnoreCase))
         {
             Console.WriteLine($"Ollama endpoint: {ollamaEndpoint}");
+            Console.WriteLine("Local model verbose logging: enabled for setup, model turns, tool invocations, and tool failures.");
         }
         Console.WriteLine($"Workspace: {workspaceRoot}");
         Console.WriteLine("Loaded plugins: Workspace, CodeEditor, TaskPlanner, Shell, ProjectAnalysis, Execution, GitAnalysis, GitCheckout, GitHubProjects, GitHubAuth, AIConfiguration, HealthCheck");
         Console.WriteLine(useQwenToolCompatibility
-            ? "Tool calling mode: qwen3 local compatibility fallback"
+            ? "Tool calling mode: local model compatibility fallback"
             : "Automatic function calling: enabled");
         Console.WriteLine("Type a prompt, or press Enter on an empty line to exit.\n");
 
@@ -141,7 +150,12 @@ internal class Program
             string responseText;
             if (useQwenToolCompatibility)
             {
-                responseText = await QwenToolingCompatibility.RunTurnAsync(chat, history, kernel, plugins);
+                responseText = await QwenToolingCompatibility.RunTurnAsync(
+                    chat,
+                    history,
+                    kernel,
+                    plugins,
+                    message => Console.WriteLine($"[local-tooling] {message}"));
             }
             else
             {
