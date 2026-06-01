@@ -331,7 +331,7 @@ public static partial class QwenToolingCompatibility
             || TryParseJsonToolCallProperty(element, "function_call", toolIndex, out toolCall)
             || TryParseJsonToolCallElement(element, toolIndex, out toolCall))
         {
-            return [toolCall];
+            return [toolCall!];
         }
 
         return new List<QwenParsedToolCall>();
@@ -351,7 +351,7 @@ public static partial class QwenToolingCompatibility
 
         foreach (var item in toolCallsElement.EnumerateArray())
         {
-            if (TryParseJsonToolCallElement(item, toolIndex, out var toolCall))
+            if (TryParseJsonToolCallElement(item, toolIndex, out var toolCall) && toolCall is not null)
             {
                 toolCalls.Add(toolCall);
             }
@@ -364,9 +364,9 @@ public static partial class QwenToolingCompatibility
         JsonElement element,
         string propertyName,
         IReadOnlyDictionary<string, QwenToolDefinition> toolIndex,
-        out QwenParsedToolCall toolCall)
+        out QwenParsedToolCall? toolCall)
     {
-        toolCall = default!;
+        toolCall = null;
         return element.TryGetProperty(propertyName, out var toolCallElement)
             && TryParseJsonToolCallElement(toolCallElement, toolIndex, out toolCall);
     }
@@ -374,9 +374,9 @@ public static partial class QwenToolingCompatibility
     private static bool TryParseJsonToolCallElement(
         JsonElement element,
         IReadOnlyDictionary<string, QwenToolDefinition> toolIndex,
-        out QwenParsedToolCall toolCall)
+        out QwenParsedToolCall? toolCall)
     {
-        toolCall = default!;
+        toolCall = null;
 
         JsonElement functionElement;
         if (element.TryGetProperty("function", out var nestedFunctionElement))
