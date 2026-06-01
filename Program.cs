@@ -49,7 +49,7 @@ internal class Program
         var builder = Kernel.CreateBuilder();
         var plugins = new (string Name, object Instance)[]
         {
-            ("Workspace", new WorkspacePlugin(workspaceRoot)),
+            ("Workspace", new WorkspacePlugin(workspaceRoot, configuration)),
             ("CodeEditor", new CodeEditingPlugin(workspaceRoot)),
             ("TaskPlanner", new TaskPlanningPlugin(workspaceRoot)),
             ("Shell", new ShellCommandPlugin(workspaceRoot)),

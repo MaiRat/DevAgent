@@ -194,7 +194,61 @@ public sealed class QwenToolingCompatibilityTests
         }
         finally
         {
-            Directory.Delete(workspaceRoot, recursive: true);
+            DeleteDirectoryIfExists(workspaceRoot);
+        }
+    }
+
+    [Fact]
+    public void WriteFile_AllowsConfiguredAbsolutePath()
+    {
+        var workspaceRoot = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var externalRoot = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(workspaceRoot);
+        Directory.CreateDirectory(externalRoot);
+
+        try
+        {
+            var configuration = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?> { ["Agent:WritableRoots:0"] = externalRoot })
+                .Build();
+
+            var plugin = new WorkspacePlugin(workspaceRoot, configuration);
+            var targetPath = Path.Combine(externalRoot, "nested", "notes.txt");
+
+            var response = plugin.WriteFile(targetPath, "hello from an external root");
+
+            Assert.Equal($"Wrote file: {targetPath}", response);
+            Assert.Equal("hello from an external root", File.ReadAllText(targetPath));
+        }
+        finally
+        {
+            DeleteDirectoryIfExists(workspaceRoot);
+            DeleteDirectoryIfExists(externalRoot);
+        }
+    }
+
+    [Fact]
+    public void AppendFile_RejectsAbsolutePathOutsideAllowedRoots()
+    {
+        var workspaceRoot = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var externalRoot = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(workspaceRoot);
+        Directory.CreateDirectory(externalRoot);
+
+        try
+        {
+            var plugin = new WorkspacePlugin(workspaceRoot);
+            var targetPath = Path.Combine(externalRoot, "notes.txt");
+
+            var exception = Assert.Throws<InvalidOperationException>(() => plugin.AppendFile(targetPath, "blocked"));
+
+            Assert.Contains("allowed writable root", exception.Message, StringComparison.Ordinal);
+            Assert.False(File.Exists(targetPath));
+        }
+        finally
+        {
+            DeleteDirectoryIfExists(workspaceRoot);
+            DeleteDirectoryIfExists(externalRoot);
         }
     }
 
@@ -247,6 +301,23 @@ public sealed class QwenToolingCompatibilityTests
         public string ThrowError([Description("Error message to throw.")] string message)
         {
             throw new InvalidOperationException(message);
+        }
+    }
+
+    private static void DeleteDirectoryIfExists(string path)
+    {
+        if (!Directory.Exists(path))
+        {
+            return;
+        }
+
+        try
+        {
+            Directory.Delete(path, recursive: true);
+        }
+        catch
+        {
+            // Best-effort cleanup only.
         }
     }
 
