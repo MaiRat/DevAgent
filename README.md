@@ -27,14 +27,14 @@ Set your API key in one of these ways:
 
 To use a local Ollama server instead of OpenAI, set `AI:Provider` to `Ollama` and configure the `Ollama:Endpoint` and model ids. In Ollama mode, no OpenAI API key is required.
 
-For local Ollama models, the agent automatically enables the local tooling compatibility fallback so tool use continues to work even when the selected model has limited native tool-calling support. You can also force it on or off with `AI:EnableQwenToolCompatibility`.
+For local Ollama models, the agent automatically enables the local tooling compatibility fallback so tool use continues to work even when the selected model has limited native tool-calling support. You can also force it on or off with `AI:EnableLocalToolCompatibility` (the older `AI:EnableQwenToolCompatibility` key is still accepted for compatibility).
 
 ### appsettings.json
 ```json
 {
   "AI": {
     "Provider": "OpenAI",
-    "EnableQwenToolCompatibility": false
+    "EnableLocalToolCompatibility": false
   },
   "OpenAI": {
     "ModelId": "gpt-4o-mini",
@@ -76,7 +76,7 @@ Example GitHub defaults:
 ### Environment variable (PowerShell)
 ```powershell
 $env:AI__Provider="OpenAI"
-$env:AI__EnableQwenToolCompatibility="false"
+$env:AI__EnableLocalToolCompatibility="false"
 $env:OpenAI__ApiKey="your-api-key"
 $env:OpenAI__ModelId="gpt-4o-mini"
 $env:OpenAI__ToolingModelId="gpt-4o-mini"

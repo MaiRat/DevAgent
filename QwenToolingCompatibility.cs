@@ -14,11 +14,12 @@ namespace CodingAgent;
 public static partial class QwenToolingCompatibility
 {
     private const int MaxToolIterations = 8;
+    private const int MaxLogSummaryLength = 180;
     private static readonly NullabilityInfoContext NullabilityContext = new();
 
     public static bool IsEnabled(string provider, string? codingModelId, string? toolingModelId, IConfiguration configuration)
     {
-        if (bool.TryParse(configuration["AI:EnableQwenToolCompatibility"], out var configuredValue))
+        if (TryGetConfiguredCompatibilityOverride(configuration, out var configuredValue))
         {
             return configuredValue;
         }
@@ -123,7 +124,7 @@ public static partial class QwenToolingCompatibility
             }
         }
 
-        const string limitMessage = "Stopped after reaching the qwen3 tool iteration limit.";
+        const string limitMessage = "Stopped after reaching the local model tool iteration limit.";
         Log(verboseLog, limitMessage);
         history.AddAssistantMessage(limitMessage);
         return limitMessage;
@@ -463,11 +464,23 @@ public static partial class QwenToolingCompatibility
             return "(empty)";
         }
 
-        var normalized = Regex.Replace(value, @"\s+", " ").Trim();
-        const int maxLength = 180;
-        return normalized.Length <= maxLength
+        var normalized = LogWhitespaceRegex().Replace(value, " ").Trim();
+        return normalized.Length <= MaxLogSummaryLength
             ? normalized
-            : $"{normalized[..maxLength]}...";
+            : $"{normalized[..MaxLogSummaryLength]}...";
+    }
+
+    [GeneratedRegex(@"\s+", RegexOptions.Compiled)]
+    private static partial Regex LogWhitespaceRegex();
+
+    private static bool TryGetConfiguredCompatibilityOverride(IConfiguration configuration, out bool configuredValue)
+    {
+        if (bool.TryParse(configuration["AI:EnableLocalToolCompatibility"], out configuredValue))
+        {
+            return true;
+        }
+
+        return bool.TryParse(configuration["AI:EnableQwenToolCompatibility"], out configuredValue);
     }
 }
 

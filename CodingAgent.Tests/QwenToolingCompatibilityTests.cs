@@ -73,12 +73,24 @@ public sealed class QwenToolingCompatibilityTests
     public void IsEnabled_UsesExplicitConfigurationOverride()
     {
         var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?> { ["AI:EnableQwenToolCompatibility"] = "true" })
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["AI:EnableLocalToolCompatibility"] = "true" })
             .Build();
 
         var enabled = QwenToolingCompatibility.IsEnabled("OpenAI", "gpt-5.4", "gpt-5.4-mini", configuration);
 
         Assert.True(enabled);
+    }
+
+    [Fact]
+    public void IsEnabled_SupportsLegacyQwenConfigurationOverride()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["AI:EnableQwenToolCompatibility"] = "false" })
+            .Build();
+
+        var enabled = QwenToolingCompatibility.IsEnabled("Ollama", "llama3.1", "llama3.1", configuration);
+
+        Assert.False(enabled);
     }
 
     [Fact]
