@@ -1,6 +1,6 @@
 ﻿# Coding Agent
 
-A bootstrap C# coding agent workspace using Semantic Kernel with either OpenAI or a local Ollama server.
+A bootstrap C# coding agent workspace using Semantic Kernel with either OpenAI or a local Ollama server, including a local qwen3 tooling compatibility path.
 
 ## Contents
 - `CodingAgent.csproj` - .NET project file
@@ -27,11 +27,14 @@ Set your API key in one of these ways:
 
 To use a local Ollama server instead of OpenAI, set `AI:Provider` to `Ollama` and configure the `Ollama:Endpoint` and model ids. In Ollama mode, no OpenAI API key is required.
 
+For local qwen3 models, the agent automatically enables a qwen-compatible tooling fallback when either configured model id contains `qwen3`. You can also force it on or off with `AI:EnableQwenToolCompatibility`.
+
 ### appsettings.json
 ```json
 {
   "AI": {
-    "Provider": "OpenAI"
+    "Provider": "OpenAI",
+    "EnableQwenToolCompatibility": false
   },
   "OpenAI": {
     "ModelId": "gpt-4o-mini",
@@ -73,6 +76,7 @@ Example GitHub defaults:
 ### Environment variable (PowerShell)
 ```powershell
 $env:AI__Provider="OpenAI"
+$env:AI__EnableQwenToolCompatibility="false"
 $env:OpenAI__ApiKey="your-api-key"
 $env:OpenAI__ModelId="gpt-4o-mini"
 $env:OpenAI__ToolingModelId="gpt-4o-mini"
@@ -106,6 +110,34 @@ Then type prompts interactively.
 The agent keeps chat history and enables automatic kernel function invocation for compatible OpenAI tool-calling models.
 
 When using Ollama, tool-calling behavior depends on the selected local model and its OpenAI-compatible API behavior.
+
+For local qwen3 models, the agent now adds an explicit tool manifest and uses a qwen-oriented fallback loop that:
+- advertises each plugin function as `PluginName.function_name`
+- accepts qwen-style XML tool calls such as `<tool_call><Workspace.list_files><relativePath>.</relativePath></Workspace.list_files></tool_call>`
+- also accepts OpenAI-style JSON `tool_calls` payloads when the local server emits them
+- returns tool outputs in a `<tool_response>` block so the model can continue tool use or produce a final answer
+
+### Extending qwen3 Tooling
+Add new tool functions by decorating public plugin methods with `[KernelFunction("function_name")]` and `[Description("...")]`.
+Parameter descriptions are taken from `[Description]` attributes on method arguments and are included in the qwen-compatible manifest automatically.
+Use unique function names when possible; if two plugins share the same function name, qwen should call the fully qualified `PluginName.function_name`.
+
+Example qwen-compatible tool call:
+```xml
+<tool_call>
+  <Workspace.list_files>
+    <relativePath>.</relativePath>
+  </Workspace.list_files>
+</tool_call>
+```
+
+Example qwen-compatible tool response injected by the agent:
+```xml
+<tool_response name="Workspace.list_files">
+[DIR]  Plugins
+[FILE] Program.cs
+</tool_response>
+```
 
 ## AI Configuration Notes
 - The `AIConfiguration` plugin exposes safe runtime inspection helpers for the active AI provider and model configuration.
