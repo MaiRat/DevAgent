@@ -199,6 +199,60 @@ public sealed class QwenToolingCompatibilityTests
     }
 
     [Fact]
+    public void WriteFile_AllowsConfiguredAbsolutePath()
+    {
+        var workspaceRoot = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var externalRoot = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(workspaceRoot);
+        Directory.CreateDirectory(externalRoot);
+
+        try
+        {
+            var configuration = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?> { ["Agent:WritableRoots:0"] = externalRoot })
+                .Build();
+
+            var plugin = new WorkspacePlugin(workspaceRoot, configuration);
+            var targetPath = Path.Combine(externalRoot, "nested", "notes.txt");
+
+            var response = plugin.WriteFile(targetPath, "hello from an external root");
+
+            Assert.Equal($"Wrote file: {targetPath}", response);
+            Assert.Equal("hello from an external root", File.ReadAllText(targetPath));
+        }
+        finally
+        {
+            Directory.Delete(workspaceRoot, recursive: true);
+            Directory.Delete(externalRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void AppendFile_RejectsAbsolutePathOutsideAllowedRoots()
+    {
+        var workspaceRoot = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var externalRoot = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(workspaceRoot);
+        Directory.CreateDirectory(externalRoot);
+
+        try
+        {
+            var plugin = new WorkspacePlugin(workspaceRoot);
+            var targetPath = Path.Combine(externalRoot, "notes.txt");
+
+            var exception = Assert.Throws<InvalidOperationException>(() => plugin.AppendFile(targetPath, "blocked"));
+
+            Assert.Contains("allowed writable root", exception.Message, StringComparison.Ordinal);
+            Assert.False(File.Exists(targetPath));
+        }
+        finally
+        {
+            Directory.Delete(workspaceRoot, recursive: true);
+            Directory.Delete(externalRoot, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task RunTurnAsync_LogsToolExecutionFailures()
     {
         var plugins = new (string Name, object Instance)[]

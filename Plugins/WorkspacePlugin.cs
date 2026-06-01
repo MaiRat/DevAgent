@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Text;
+using Microsoft.Extensions.Configuration;
 using Microsoft.SemanticKernel;
 
 namespace CodingAgent.Plugins;
@@ -7,10 +8,12 @@ namespace CodingAgent.Plugins;
 public class WorkspacePlugin
 {
     private readonly string _workspaceRoot;
+    private readonly string[] _writableRoots;
 
-    public WorkspacePlugin(string workspaceRoot)
+    public WorkspacePlugin(string workspaceRoot, IConfiguration? configuration = null)
     {
         _workspaceRoot = Path.GetFullPath(workspaceRoot);
+        _writableRoots = [.. GetWritableRoots(configuration)];
     }
 
     [KernelFunction("summarize_workspace")]
@@ -51,12 +54,12 @@ public class WorkspacePlugin
     }
 
     [KernelFunction("write_file")]
-    [Description("Write text content to a file in the workspace using a relative path. Creates directories if needed.")]
+    [Description("Write text content to a file path. Relative paths stay inside the workspace root; absolute paths are allowed only when they match the workspace root or an explicitly configured writable root. Creates directories if needed.")]
     public string WriteFile(
-        [Description("Relative file path inside the workspace.")] string relativePath,
+        [Description("Relative file path inside the workspace, or an absolute path under the workspace root or an allowed writable root.")] string relativePath,
         [Description("The full text content to write into the file.")] string content)
     {
-        var fullPath = ResolveSafePath(relativePath);
+        var fullPath = ResolveWritablePath(relativePath);
         var directory = Path.GetDirectoryName(fullPath);
         if (!string.IsNullOrWhiteSpace(directory)) Directory.CreateDirectory(directory);
         File.WriteAllText(fullPath, content, Encoding.UTF8);
@@ -64,12 +67,12 @@ public class WorkspacePlugin
     }
 
     [KernelFunction("append_file")]
-    [Description("Append text content to a file in the workspace using a relative path. Creates the file if needed.")]
+    [Description("Append text content to a file path. Relative paths stay inside the workspace root; absolute paths are allowed only when they match the workspace root or an explicitly configured writable root. Creates the file if needed.")]
     public string AppendFile(
-        [Description("Relative file path inside the workspace.")] string relativePath,
+        [Description("Relative file path inside the workspace, or an absolute path under the workspace root or an allowed writable root.")] string relativePath,
         [Description("The text content to append.")] string content)
     {
-        var fullPath = ResolveSafePath(relativePath);
+        var fullPath = ResolveWritablePath(relativePath);
         var directory = Path.GetDirectoryName(fullPath);
         if (!string.IsNullOrWhiteSpace(directory)) Directory.CreateDirectory(directory);
         File.AppendAllText(fullPath, content, Encoding.UTF8);
@@ -94,8 +97,71 @@ public class WorkspacePlugin
     {
         relativePath ??= ".";
         var combined = Path.GetFullPath(Path.Combine(_workspaceRoot, relativePath));
-        if (!combined.StartsWith(_workspaceRoot, StringComparison.OrdinalIgnoreCase))
+        if (!IsPathWithinRoot(combined, _workspaceRoot))
             throw new InvalidOperationException("Path escapes the workspace root.");
         return combined;
+    }
+
+    private string ResolveWritablePath(string path)
+    {
+        path ??= ".";
+        var combined = Path.IsPathFullyQualified(path)
+            ? Path.GetFullPath(path)
+            : ResolveSafePath(path);
+
+        if (_writableRoots.All(root => !IsPathWithinRoot(combined, root)))
+        {
+            throw new InvalidOperationException("Path is not under the workspace root or an allowed writable root.");
+        }
+
+        return combined;
+    }
+
+    private IEnumerable<string> GetWritableRoots(IConfiguration? configuration)
+    {
+        yield return _workspaceRoot;
+
+        if (configuration is null)
+        {
+            yield break;
+        }
+
+        foreach (var configuredRoot in configuration.GetSection("Agent:WritableRoots").GetChildren())
+        {
+            var root = configuredRoot.Value;
+            if (string.IsNullOrWhiteSpace(root))
+            {
+                continue;
+            }
+
+            if (!Path.IsPathFullyQualified(root))
+            {
+                throw new InvalidOperationException($"Configured writable root must be an absolute path: {root}");
+            }
+
+            yield return Path.GetFullPath(root);
+        }
+    }
+
+    private static bool IsPathWithinRoot(string path, string root)
+    {
+        var comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+
+        var normalizedPath = Path.GetFullPath(path);
+        var normalizedRoot = Path.GetFullPath(root);
+
+        if (string.Equals(normalizedPath, normalizedRoot, comparison))
+        {
+            return true;
+        }
+
+        if (!normalizedRoot.EndsWith(Path.DirectorySeparatorChar))
+        {
+            normalizedRoot += Path.DirectorySeparatorChar;
+        }
+
+        return normalizedPath.StartsWith(normalizedRoot, comparison);
     }
 }
