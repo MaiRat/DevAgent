@@ -14,28 +14,24 @@ namespace CodingAgent;
 public static partial class QwenToolingCompatibility
 {
     private const int MaxToolIterations = 8;
+    private const int MaxLogSummaryLength = 180;
     private static readonly NullabilityInfoContext NullabilityContext = new();
 
     public static bool IsEnabled(string provider, string? codingModelId, string? toolingModelId, IConfiguration configuration)
     {
-        if (bool.TryParse(configuration["AI:EnableQwenToolCompatibility"], out var configuredValue))
+        if (TryGetConfiguredCompatibilityOverride(configuration, out var configuredValue))
         {
             return configuredValue;
         }
 
-        if (!string.Equals(provider, "Ollama", StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        return ContainsQwen3(codingModelId) || ContainsQwen3(toolingModelId);
+        return string.Equals(provider, "Ollama", StringComparison.OrdinalIgnoreCase);
     }
 
     public static string BuildSystemPrompt(IEnumerable<(string Name, object Instance)> plugins)
     {
         var tools = DescribeTools(plugins);
         var builder = new StringBuilder();
-        builder.AppendLine("You are running in local qwen3 tool compatibility mode.");
+        builder.AppendLine("You are running in local model tool compatibility mode.");
         builder.AppendLine("When you need a tool, respond with XML only using this exact shape:");
         builder.AppendLine("<tool_call>");
         builder.AppendLine("  <PluginName.function_name>");
@@ -75,23 +71,33 @@ public static partial class QwenToolingCompatibility
         ChatHistory history,
         Kernel kernel,
         IEnumerable<(string Name, object Instance)> plugins,
+        Action<string>? verboseLog = null,
         CancellationToken cancellationToken = default)
     {
-        var toolIndex = BuildToolIndex(DescribeTools(plugins));
+        var toolDefinitions = DescribeTools(plugins);
+        var toolIndex = BuildToolIndex(toolDefinitions);
         var settings = new OpenAIPromptExecutionSettings();
         var initialUserRequest = history.LastOrDefault(message => message.Role == AuthorRole.User)?.Content ?? string.Empty;
         var expectsWorkspaceChanges = LooksLikeWorkspaceChangeRequest(initialUserRequest);
         var appliedWorkspaceChange = false;
         var promptedForWorkspaceChanges = false;
 
+        Log(verboseLog, $"Starting local model tooling compatibility loop. Advertised tools: {toolDefinitions.Count}.");
+        Log(verboseLog, $"Initial user request: {SummarizeForLog(initialUserRequest)}");
+
         for (var iteration = 0; iteration < MaxToolIterations; iteration++)
         {
+            Log(verboseLog, $"Iteration {iteration + 1}/{MaxToolIterations}: requesting local model response.");
             var result = await chat.GetChatMessageContentAsync(history, executionSettings: settings, kernel: kernel, cancellationToken: cancellationToken);
             var content = (result.Content ?? string.Empty).Trim();
 
             history.AddMessage(result.Role, content);
+            Log(verboseLog, $"Iteration {iteration + 1}/{MaxToolIterations}: model response: {SummarizeForLog(content)}");
 
             var toolCalls = ParseToolCalls(content, toolIndex);
+            Log(verboseLog, toolCalls.Count == 0
+                ? $"Iteration {iteration + 1}/{MaxToolIterations}: no tool calls detected."
+                : $"Iteration {iteration + 1}/{MaxToolIterations}: parsed {toolCalls.Count} tool call(s): {string.Join(", ", toolCalls.Select(toolCall => toolCall.Tool.Name))}");
             if (toolCalls.Count == 0)
             {
                 if (expectsWorkspaceChanges
@@ -99,23 +105,27 @@ public static partial class QwenToolingCompatibility
                     && !promptedForWorkspaceChanges
                     && ShouldPromptForWorkspaceChanges(content))
                 {
+                    Log(verboseLog, "Advisory-only response detected for a workspace change request. Prompting the local model to apply the change with tools.");
                     history.AddUserMessage("Your last reply only gave git or workflow advice, but the user asked for a local workspace change. Inspect files if needed and use Workspace or CodeEditor write/edit tools to apply the requested change locally before your final answer.");
                     promptedForWorkspaceChanges = true;
                     continue;
                 }
 
+                Log(verboseLog, "Returning final assistant response without additional tool calls.");
                 return content;
             }
 
             foreach (var toolCall in toolCalls)
             {
-                var toolResponse = await InvokeToolAsync(kernel, toolCall, cancellationToken);
+                var toolResponse = await InvokeToolAsync(kernel, toolCall, cancellationToken, verboseLog);
                 appliedWorkspaceChange |= IsWorkspaceMutationTool(toolCall.Tool);
                 history.AddUserMessage(BuildToolResponse(toolCall.Tool.Name, toolResponse));
+                Log(verboseLog, $"Captured tool response for {toolCall.Tool.Name}: {SummarizeForLog(toolResponse)}");
             }
         }
 
-        const string limitMessage = "Stopped after reaching the qwen3 tool iteration limit.";
+        const string limitMessage = "Stopped after reaching the local model tool iteration limit.";
+        Log(verboseLog, limitMessage);
         history.AddAssistantMessage(limitMessage);
         return limitMessage;
     }
@@ -127,9 +137,6 @@ public static partial class QwenToolingCompatibility
         var toolIndex = BuildToolIndex(DescribeTools(plugins));
         return ParseToolCalls(content, toolIndex);
     }
-
-    private static bool ContainsQwen3(string? modelId) =>
-        !string.IsNullOrWhiteSpace(modelId) && modelId.Contains("qwen3", StringComparison.OrdinalIgnoreCase);
 
     private static IReadOnlyList<QwenToolDefinition> DescribeTools(IEnumerable<(string Name, object Instance)> plugins)
     {
@@ -378,10 +385,11 @@ public static partial class QwenToolingCompatibility
         return content[start..(end + 1)];
     }
 
-    private static async Task<string> InvokeToolAsync(Kernel kernel, QwenParsedToolCall toolCall, CancellationToken cancellationToken)
+    private static async Task<string> InvokeToolAsync(Kernel kernel, QwenParsedToolCall toolCall, CancellationToken cancellationToken, Action<string>? verboseLog)
     {
         try
         {
+            Log(verboseLog, $"Invoking tool {toolCall.Tool.Name} with arguments: {FormatArgumentsForLog(toolCall.Arguments)}");
             var arguments = new KernelArguments();
             foreach (var argument in toolCall.Arguments)
             {
@@ -394,10 +402,13 @@ public static partial class QwenToolingCompatibility
                 arguments: arguments,
                 cancellationToken: cancellationToken);
 
-            return result.GetValue<object>()?.ToString() ?? result.ToString() ?? string.Empty;
+            var resultText = result.GetValue<object>()?.ToString() ?? result.ToString() ?? string.Empty;
+            Log(verboseLog, $"Tool completed successfully: {toolCall.Tool.Name}");
+            return resultText;
         }
         catch (Exception ex)
         {
+            Log(verboseLog, $"Tool execution failed for {toolCall.Tool.Name}: {ex}");
             return $"Tool execution failed for {toolCall.Tool.Name}: {ex.Message}";
         }
     }
@@ -430,6 +441,47 @@ public static partial class QwenToolingCompatibility
 
     [GeneratedRegex(@"<tool_call>[\s\S]*?</tool_call>", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
     private static partial Regex ToolCallRegex();
+
+    private static void Log(Action<string>? verboseLog, string message)
+    {
+        verboseLog?.Invoke(message);
+    }
+
+    private static string FormatArgumentsForLog(IReadOnlyDictionary<string, string> arguments)
+    {
+        if (arguments.Count == 0)
+        {
+            return "(none)";
+        }
+
+        return string.Join(", ", arguments.Select(argument => $"{argument.Key}={SummarizeForLog(argument.Value)}"));
+    }
+
+    private static string SummarizeForLog(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return "(empty)";
+        }
+
+        var normalized = LogWhitespaceRegex().Replace(value, " ").Trim();
+        return normalized.Length <= MaxLogSummaryLength
+            ? normalized
+            : $"{normalized[..MaxLogSummaryLength]}...";
+    }
+
+    [GeneratedRegex(@"\s+", RegexOptions.Compiled)]
+    private static partial Regex LogWhitespaceRegex();
+
+    private static bool TryGetConfiguredCompatibilityOverride(IConfiguration configuration, out bool configuredValue)
+    {
+        if (bool.TryParse(configuration["AI:EnableLocalToolCompatibility"], out configuredValue))
+        {
+            return true;
+        }
+
+        return bool.TryParse(configuration["AI:EnableQwenToolCompatibility"], out configuredValue);
+    }
 }
 
 public sealed record QwenToolDefinition(

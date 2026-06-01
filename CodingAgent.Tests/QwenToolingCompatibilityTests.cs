@@ -18,6 +18,7 @@ public sealed class QwenToolingCompatibilityTests
     {
         var prompt = QwenToolingCompatibility.BuildSystemPrompt(SamplePlugins);
 
+        Assert.Contains("local model tool compatibility mode", prompt);
         Assert.Contains("Sample.lookup_value", prompt);
         Assert.Contains("query (required)", prompt);
         Assert.Contains("mode (optional)", prompt);
@@ -72,10 +73,32 @@ public sealed class QwenToolingCompatibilityTests
     public void IsEnabled_UsesExplicitConfigurationOverride()
     {
         var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?> { ["AI:EnableQwenToolCompatibility"] = "true" })
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["AI:EnableLocalToolCompatibility"] = "true" })
             .Build();
 
         var enabled = QwenToolingCompatibility.IsEnabled("OpenAI", "gpt-5.4", "gpt-5.4-mini", configuration);
+
+        Assert.True(enabled);
+    }
+
+    [Fact]
+    public void IsEnabled_SupportsLegacyQwenConfigurationOverride()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["AI:EnableQwenToolCompatibility"] = "false" })
+            .Build();
+
+        var enabled = QwenToolingCompatibility.IsEnabled("Ollama", "llama3.1", "llama3.1", configuration);
+
+        Assert.False(enabled);
+    }
+
+    [Fact]
+    public void IsEnabled_UsesCompatibilityFallbackForAnyOllamaModel()
+    {
+        var configuration = new ConfigurationBuilder().Build();
+
+        var enabled = QwenToolingCompatibility.IsEnabled("Ollama", "llama3.1", "mistral-small", configuration);
 
         Assert.True(enabled);
     }
@@ -114,8 +137,9 @@ public sealed class QwenToolingCompatibilityTests
 
             var history = new ChatHistory();
             history.AddUserMessage("Please update the local workspace by creating notes.txt.");
+            var logs = new List<string>();
 
-            var response = await QwenToolingCompatibility.RunTurnAsync(chat, history, kernel, plugins);
+            var response = await QwenToolingCompatibility.RunTurnAsync(chat, history, kernel, plugins, logs.Add);
 
             Assert.Equal("Created notes.txt with the requested content.", response);
             Assert.Equal("hello from qwen fallback", File.ReadAllText(Path.Combine(workspaceRoot, "notes.txt")));
@@ -123,11 +147,46 @@ public sealed class QwenToolingCompatibilityTests
                 chat.SeenHistories[1],
                 message => message.Role == AuthorRole.User
                     && (message.Content?.Contains("use Workspace or CodeEditor write/edit tools", StringComparison.Ordinal) ?? false));
+            Assert.Contains(logs, log => log.Contains("Starting local model tooling compatibility loop", StringComparison.Ordinal));
+            Assert.Contains(logs, log => log.Contains("Invoking tool Workspace.write_file", StringComparison.Ordinal));
+            Assert.Contains(logs, log => log.Contains("Tool completed successfully: Workspace.write_file", StringComparison.Ordinal));
         }
         finally
         {
             Directory.Delete(workspaceRoot, recursive: true);
         }
+    }
+
+    [Fact]
+    public async Task RunTurnAsync_LogsToolExecutionFailures()
+    {
+        var plugins = new (string Name, object Instance)[]
+        {
+            ("Failing", new FailingPlugin())
+        };
+
+        var builder = Kernel.CreateBuilder();
+        builder.Plugins.AddFromObject(plugins[0].Instance, plugins[0].Name);
+        var kernel = builder.Build();
+
+        var chat = new FakeChatCompletionService(
+            """
+            <tool_call>
+              <Failing.throw_error>
+                <message>boom</message>
+              </Failing.throw_error>
+            </tool_call>
+            """,
+            "Final answer after the logged tool failure.");
+
+        var history = new ChatHistory();
+        history.AddUserMessage("Trigger the failing tool.");
+        var logs = new List<string>();
+
+        var response = await QwenToolingCompatibility.RunTurnAsync(chat, history, kernel, plugins, logs.Add);
+
+        Assert.Equal("Final answer after the logged tool failure.", response);
+        Assert.Contains(logs, log => log.Contains("Tool execution failed for Failing.throw_error", StringComparison.Ordinal));
     }
 
     private sealed class SamplePlugin
@@ -138,6 +197,16 @@ public sealed class QwenToolingCompatibilityTests
             [Description("The query to look up.")] string query,
             [Description("Optional display mode.")] string mode = "full") =>
             $"{query}:{mode}";
+    }
+
+    private sealed class FailingPlugin
+    {
+        [KernelFunction("throw_error")]
+        [Description("Always throw an error.")]
+        public string ThrowError([Description("Error message to throw.")] string message)
+        {
+            throw new InvalidOperationException(message);
+        }
     }
 
     private sealed class FakeChatCompletionService(params string[] responses) : IChatCompletionService
